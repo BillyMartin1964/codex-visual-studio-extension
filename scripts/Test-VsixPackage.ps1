@@ -117,6 +117,15 @@ try {
         throw "The packaged VSIX manifest does not contain Metadata/Identity."
     }
 
+    $releaseNotes = $manifest.SelectSingleNode("/vsix:PackageManifest/vsix:Metadata/vsix:ReleaseNotes", $namespaceManager)
+    if ($releaseNotes -and -not [string]::IsNullOrWhiteSpace($releaseNotes.InnerText)) {
+        $releaseNotesPath = $releaseNotes.InnerText.Trim()
+        if (-not [Uri]::IsWellFormedUriString($releaseNotesPath, [UriKind]::Absolute) -and
+            -not (Test-Path -LiteralPath (Join-Path $extractPath $releaseNotesPath) -PathType Leaf)) {
+            throw "The manifest references a release notes file that is missing from the VSIX: $releaseNotesPath"
+        }
+    }
+
     $manifestVersion = [string]$identity.Version
     if (-not [string]::IsNullOrWhiteSpace($ExpectedVersion) -and $manifestVersion -ne $ExpectedVersion) {
         throw "Packaged manifest version '$manifestVersion' does not match '$ExpectedVersion'."

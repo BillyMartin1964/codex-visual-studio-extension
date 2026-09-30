@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using CodexVsix.Models;
 using Newtonsoft.Json.Linq;
 
@@ -21,15 +23,66 @@ internal static class CodexModelCatalog
 
     internal static IReadOnlyList<string> GenericReasoningEfforts => AllReasoningEfforts;
 
+    internal static async Task<JToken?> ReadAllPagesAsync(
+        Func<JObject, CancellationToken, Task<JToken?>> readPage,
+        JToken? parameters,
+        CancellationToken cancellationToken)
+    {
+        var request = parameters is JObject values ? (JObject)values.DeepClone() : new JObject();
+        // Explicit cursor requests retain their pagination contract.
+        if (request["cursor"]?.Type == JTokenType.String)
+        {
+            return await readPage(request, cancellationToken).ConfigureAwait(false);
+        }
+
+        request["limit"] ??= 100;
+        var data = new JArray();
+        var cursors = new HashSet<string>(StringComparer.Ordinal);
+        JObject? combined = null;
+        for (var page = 0; page < 100; page++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var response = await readPage(request, cancellationToken).ConfigureAwait(false);
+            if (response is not JObject record || (record["data"] as JArray ?? record["models"] as JArray) is not JArray items)
+            {
+                throw new InvalidOperationException("The Codex model catalog has an invalid response shape.");
+            }
+
+            combined ??= (JObject)record.DeepClone();
+            foreach (var item in items)
+            {
+                data.Add(item.DeepClone());
+            }
+
+            var cursor = record["nextCursor"]?.Value<string>();
+            if (string.IsNullOrEmpty(cursor))
+            {
+                combined["data"] = data;
+                if (combined["models"] is not null) combined["models"] = data.DeepClone();
+                combined["nextCursor"] = JValue.CreateNull();
+                return combined;
+            }
+
+            if (!cursors.Add(cursor!))
+            {
+                throw new InvalidOperationException("The Codex model catalog repeated a pagination cursor.");
+            }
+
+            request["cursor"] = cursor;
+        }
+
+        throw new InvalidOperationException("The Codex model catalog exceeded the pagination limit.");
+    }
+
     internal static IReadOnlyList<CodexModelOption> ParseModelListResponse(JToken? response, bool includeHidden)
     {
         var models = new List<CodexModelOption>();
-        if (response?["data"] is not JArray items)
+        if (response is not JObject record || (record["data"] as JArray ?? record["models"] as JArray) is not JArray items)
         {
             return models;
         }
 
-        foreach (var item in items)
+        foreach (var item in items.OfType<JObject>())
         {
             if (!includeHidden && item?["hidden"]?.Value<bool>() == true)
             {
@@ -64,6 +117,10 @@ internal static class CodexModelCatalog
     {
         return new[]
         {
+            Create("GPT-6.1 Sol", "gpt-6.1-sol", "low", "low", "medium", "high", "xhigh", "max", "ultra"),
+            Create("GPT-6 Astra", "gpt-6-astra", "medium", "low", "medium", "high", "xhigh", "max", "ultra"),
+            Create("GPT-6 Sol", "gpt-6-sol", "medium", "low", "medium", "high", "xhigh", "max", "ultra"),
+            Create("GPT-6 Luna", "gpt-6-luna", "medium", "low", "medium", "high", "xhigh", "max"),
             Create("GPT-5.6 Sol", "gpt-5.6-sol", "low", "low", "medium", "high", "xhigh", "max", "ultra"),
             Create("GPT-5.6 Terra", "gpt-5.6-terra", "medium", "low", "medium", "high", "xhigh", "max", "ultra"),
             Create("GPT-5.6 Luna", "gpt-5.6-luna", "medium", "low", "medium", "high", "xhigh", "max"),

@@ -25,6 +25,12 @@ internal static class CodexExecutableResolver
     }
 
     public static string ResolveExecutableLocation(string? configuredPath, string? environmentVariables)
+        => ResolveExecutableLocationCore(configuredPath,
+            name => ResolveFromPath(name, environmentVariables),
+            name => ResolveWithCommandResolution(name, environmentVariables));
+
+    internal static string ResolveExecutableLocationCore(string? configuredPath,
+        Func<string, string> resolveFromPath, Func<string, string> resolveCommand)
     {
         var normalizedConfiguredPath = NormalizeConfiguredExecutablePath(configuredPath);
         if (string.IsNullOrWhiteSpace(normalizedConfiguredPath))
@@ -43,16 +49,26 @@ internal static class CodexExecutableResolver
             return string.Empty;
         }
 
-        var fromPath = ResolveFromPath(normalizedConfiguredPath, environmentVariables);
+        var fromPath = resolveFromPath(normalizedConfiguredPath);
         if (!string.IsNullOrWhiteSpace(fromPath))
         {
             return fromPath;
         }
 
-        var fromCommandResolution = ResolveWithCommandResolution(normalizedConfiguredPath, environmentVariables);
+        var fromCommandResolution = resolveCommand(normalizedConfiguredPath);
         if (!string.IsNullOrWhiteSpace(fromCommandResolution))
         {
             return fromCommandResolution;
+        }
+
+        // Search for the native install only after exhausting the legacy command.
+        // An explicit path or a different command name is never substituted.
+        if (IsWindows() && string.Equals(normalizedConfiguredPath, "codex.cmd", StringComparison.OrdinalIgnoreCase))
+        {
+            var native = resolveFromPath("codex.exe");
+            return !string.IsNullOrWhiteSpace(native)
+                ? native
+                : resolveCommand("codex.exe");
         }
 
         return string.Empty;

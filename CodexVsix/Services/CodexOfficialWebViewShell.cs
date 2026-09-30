@@ -8,7 +8,9 @@ namespace CodexVsix.Services;
 internal static class CodexOfficialWebViewShell
 {
     internal const string OfficialExtensionVersion = "26.5527.31454";
-    internal const string AssetHostName = "codex-assets.local";
+    // Keep the shell origin (and its persisted state) stable, but give each VSIX
+    // version a fresh origin for the frozen, fixed-name asset chunks.
+    internal static readonly string AssetHostName = "codex-assets-v" + ExtensionInfo.Version.Replace('.', '-') + ".local";
     internal const string ShellHostName = "codex-shell.local";
 
     private static readonly Regex RelativeAssetRegex = new(

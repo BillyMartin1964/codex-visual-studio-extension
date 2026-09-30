@@ -590,6 +590,35 @@ public sealed class SolutionContextService
         return string.IsNullOrWhiteSpace(path) ? null : Path.GetDirectoryName(path);
     }
 
+    internal bool TryUpdateOpenTextDocument(string path, string content)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        try
+        {
+            var dte = Package.GetGlobalService(typeof(DTE)) as DTE;
+            if (dte?.Documents is null) return false;
+            foreach (Document document in dte.Documents)
+            {
+                if (!string.Equals(document.FullName, path, StringComparison.OrdinalIgnoreCase)) continue;
+                // Preserve unsaved edits made manually to the generated artifact.
+                if (!document.Saved || document.Object("TextDocument") is not TextDocument text) return false;
+                var start = text.StartPoint.CreateEditPoint();
+                if (!string.Equals(start.GetText(text.EndPoint), content, StringComparison.Ordinal))
+                {
+                    start.ReplaceText(text.EndPoint, content, 0);
+                    document.Save();
+                }
+
+                return true;
+            }
+        }
+        catch
+        {
+        }
+
+        return false;
+    }
+
     private string? TryGetActiveDocumentPath()
     {
         ThreadHelper.ThrowIfNotOnUIThread();

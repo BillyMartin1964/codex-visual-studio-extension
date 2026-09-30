@@ -116,6 +116,20 @@ public sealed class CodexProcessService : IDisposable
 
         var workingDirectory = ResolveWorkingDirectory(settings.WorkingDirectory);
         await EnsureServerReadyAsync(settings, workingDirectory, cancellationToken).ConfigureAwait(false);
+        if (string.Equals(method, "account/read", StringComparison.Ordinal))
+        {
+            return await CodexProviderAuthResolver.ReadAccountAsync(
+                (requestMethod, values, token) => SendRequestAsync(requestMethod, values, token),
+                parameters, settings.Profile, workingDirectory, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (string.Equals(method, "model/list", StringComparison.Ordinal))
+        {
+            return await CodexModelCatalog.ReadAllPagesAsync(
+                (values, token) => SendRequestAsync("model/list", values, token),
+                parameters, cancellationToken).ConfigureAwait(false);
+        }
+
         return await SendRequestAsync(method, parameters, cancellationToken).ConfigureAwait(false);
     }
 
@@ -431,10 +445,8 @@ public sealed class CodexProcessService : IDisposable
 
     public async Task<IReadOnlyList<CodexModelOption>> ListModelsAsync(CodexExtensionSettings settings, CancellationToken cancellationToken, bool includeHidden = false)
     {
-        var workingDirectory = ResolveWorkingDirectory(settings.WorkingDirectory);
-        await EnsureServerReadyAsync(settings, workingDirectory, cancellationToken).ConfigureAwait(false);
-
-        var response = await SendRequestAsync("model/list", new { }, cancellationToken).ConfigureAwait(false);
+        var response = await InvokeAppServerRequestAsync(settings, "model/list",
+            new JObject { ["includeHidden"] = includeHidden }, cancellationToken).ConfigureAwait(false);
         return CodexModelCatalog.ParseModelListResponse(response, includeHidden);
     }
 

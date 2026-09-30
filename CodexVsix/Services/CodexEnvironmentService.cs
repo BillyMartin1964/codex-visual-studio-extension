@@ -297,15 +297,19 @@ public sealed class CodexEnvironmentService
                 @params = new { }
             }).ConfigureAwait(false);
 
-            await WriteJsonRpcMessageAsync(writer, new
-            {
-                id = 2,
-                method = "account/read",
-                @params = new { refreshToken = false }
-            }).ConfigureAwait(false);
-
-            var accountResponse = await ReadJsonRpcResponseAsync(process.StandardOutput, 2, cancellationToken).ConfigureAwait(false);
-            var result = accountResponse?["result"] as JObject;
+            var nextRequestId = 2;
+            var accountResult = await CodexProviderAuthResolver.ReadAccountAsync(
+                async (method, parameters, token) =>
+                {
+                    var id = nextRequestId++;
+                    await WriteJsonRpcMessageAsync(writer, new { id, method, @params = parameters }).ConfigureAwait(false);
+                    var response = await ReadJsonRpcResponseAsync(process.StandardOutput, id, token).ConfigureAwait(false);
+                    if (response is null || response["error"] is not null)
+                        throw new InvalidOperationException("The Codex account inspection request failed.");
+                    return response["result"];
+                }, new JObject { ["refreshToken"] = false }, settings.Profile,
+                settings.WorkingDirectory, cancellationToken).ConfigureAwait(false);
+            var result = accountResult as JObject;
             if (result is null)
             {
                 return AppServerAuthInspection.Empty;

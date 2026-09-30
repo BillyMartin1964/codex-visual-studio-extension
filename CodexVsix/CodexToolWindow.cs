@@ -19,7 +19,7 @@ public sealed class CodexToolWindow : ToolWindowPane
     public CodexToolWindow() : base(null)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
-        Caption = "Codex";
+        Caption = "Codex Community Connector";
 
         try
         {

@@ -45,6 +45,9 @@ jobs:
         shell: pwsh
         run: dotnet test CodexVs2026Extension.sln -c Release --no-restore
 
+      - name: Test frozen WebView compatibility
+        run: node --test scripts/tests/webview-compatibility.test.mjs
+
       - name: Build VSIX
         shell: pwsh
         run: |
@@ -67,5 +70,5 @@ jobs:
       - name: Upload VSIX
         uses: actions/upload-artifact@v4
         with:
-          name: Visual-Codex-Studio-${{ github.sha }}
+          name: Codex-Community-Connector-${{ github.sha }}
           path: CodexVsix/CodexVsix.vsix

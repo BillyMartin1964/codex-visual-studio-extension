@@ -34,6 +34,8 @@ public sealed class CodexOfficialWebViewShellTests
             diagnosticLoggingEnabled: true);
 
         Assert.Contains("https://" + CodexOfficialWebViewShell.AssetHostName + "/webview/assets/", html);
+        Assert.Contains("codex-assets-v" + ExtensionInfo.Version.Replace('.', '-') + ".local", html);
+        Assert.DoesNotContain("https://codex-assets.local/", html);
         Assert.Contains("window.chrome.webview.postMessage", html);
         Assert.DoesNotContain("window.parent.postMessage({ channel: CHANNEL", html);
         Assert.Contains("name=\"codex-version\"", html);

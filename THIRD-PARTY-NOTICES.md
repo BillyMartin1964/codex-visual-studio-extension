@@ -1,6 +1,6 @@
 # Third-party notices
 
-Visual Codex Studio includes the following third-party component in its distributed VSIX.
+Codex Community Connector includes the following third-party component in its distributed VSIX.
 
 ## OpenAI Codex official webview
 

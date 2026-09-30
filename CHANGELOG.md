@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.3.7 - 2026-09-30
+
+### Changed
+- Renamed the extension to Codex Community Connector and replaced the Marketplace and command icons with the supplied community logo.
+- Kept the extension identity and canonical command names so existing settings, shortcuts, and upgrades remain compatible.
+- Updated Extension Manager metadata to describe Codex Community Connector as an independent community project using the local Codex CLI.
+- Set the package's More Information URL and the author link in the Marketplace overview to https://rodrigojager.com, without www.
+- Included the current changelog in the VSIX as ReleaseNotes.txt and linked the Extension Manager release notes to this packaged file.
+- Updated the current product name in third-party notices while retaining historical changelog entries.
+
+### Fixed
+- The chat selector's actual reasoning-label component now renders Max and Ultra instead of empty entries; existing localized labels remain unchanged.
+- Chat reasoning validation now follows the selected model's runtime-supported values, so Max and Ultra are retained after selection and unsupported efforts remain excluded.
+- Automatic diff updates only update an open artifact for the same conversation; they no longer open unsolicited editor tabs or move focus.
+- Model discovery follows catalog pagination and sends the hidden-model preference, preserving runtime capabilities and model announcement metadata.
+- Added GPT-6.1 Sol, GPT-6 Astra, GPT-6 Sol, and GPT-6 Luna to the fallback catalog while retaining previous choices and saved selections.
+- The frozen composer displays Max and Ultra reasoning labels and reuses its existing icon styling.
+- Custom-provider authentication fallback resolves the active profile, waits for configuration inspection, and preserves explicit app-server authentication decisions and account metadata.
+- Native codex.exe installations are discovered after the existing codex.cmd lookups, without substituting explicit paths or changing the preference for an existing npm installation.
+- Frozen WebView assets use a versioned cache origin while the shell origin and persisted state remain stable.
+
+### Validation
+- Added behavior tests for diff lifecycle, pagination, provider authentication, executable selection, and the shipped WebView model controls.
+- Added regression tests covering the label component and validation functions used by the chat selector for Sol, Astra, Luna, and future runtime efforts.
+- Added a read-only local runtime probe; it does not submit prompts or start inference turns.
+
 ## 1.3.4 - 2026-07-22
 
 ### Corrige a alternativa visual e torna os diagnósticos úteis

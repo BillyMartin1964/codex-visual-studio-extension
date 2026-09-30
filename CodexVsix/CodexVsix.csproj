@@ -73,6 +73,14 @@
              Value="$(Version)" />
   </Target>
 
+  <Target Name="IncludeReleaseNotesInVsix" BeforeTargets="GetVsixSourceItems">
+    <ItemGroup>
+      <VSIXSourceItem Include="$(MSBuildProjectDirectory)\..\CHANGELOG.md">
+        <TargetPath>ReleaseNotes.txt</TargetPath>
+      </VSIXSourceItem>
+    </ItemGroup>
+  </Target>
+
   <Target Name="GenerateExtensionVersionSource" BeforeTargets="CoreCompile">
     <PropertyGroup>
       <_ExtensionVersionSource>$(IntermediateOutputPath)ExtensionVersion.g.cs</_ExtensionVersionSource>

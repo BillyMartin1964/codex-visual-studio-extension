@@ -1,13 +1,16 @@
-# Visual Codex Studio
+# Codex Community Connector
 
 Run Codex inside Visual Studio without leaving the IDE.
 
-`Visual Codex Studio` is a 64-bit VSIX for Visual Studio 2022 and Visual Studio
+`Codex Community Connector` is a 64-bit VSIX for Visual Studio 2022 and Visual Studio
 2026. It hosts the local Codex CLI through `codex app-server`, adapts the Codex
 WebView to Visual Studio, and connects conversations to the active solution,
 editor, theme, and user settings.
 
-Current release: [v1.3.4](https://github.com/rodrigojager/codex-visual-studio-extension/releases/tag/v1.3.4)
+Author: [Rodrigo Jager](https://rodrigojager.com). See the [changelog](CHANGELOG.md)
+for the changes and release history.
+
+Current release: [v1.3.7](https://github.com/rodrigojager/codex-visual-studio-extension/releases/tag/v1.3.7)
 
 > [!WARNING]
 > This project is not actively maintained. The 1.3.x updates were exceptional
@@ -21,16 +24,18 @@ Current release: [v1.3.4](https://github.com/rodrigojager/codex-visual-studio-ex
 > officially associated with OpenAI or ChatGPT. Logos and product references are
 > used only to describe the integration.
 
-## What's New in 1.3.4
+## What's New in 1.3.7
 
-- The extension makes several attempts to recover the modern Codex interface
-  before using the classic fallback.
-- A problem limited to the settings window no longer changes the main chat to
-  the classic interface.
-- Classic fallback screens now include an action to try the modern interface
-  again without restarting Visual Studio.
-- Provider and app-server errors are displayed more clearly, while optional
-  diagnostic logs contain more useful request, response, and recovery details.
+- New name and community logo, with the author link at https://rodrigojager.com.
+- Automatic diff updates keep editor focus and only update an already open diff
+  for the same conversation.
+- Complete model discovery preserves model announcements and runtime capabilities;
+  the fallback catalog includes GPT-6.1 Sol, GPT-6 Astra, GPT-6 Sol, and GPT-6 Luna.
+- The chat selector displays and retains Max and Ultra when the selected model
+  supports them.
+- Custom-provider authentication respects the active profile and explicit runtime
+  decisions, and executable discovery supports native codex.exe installations.
+- Versioned WebView asset caching and packaged release notes improve upgrades.
 
 ## What It Provides
 
@@ -115,7 +120,7 @@ The VSIX does not bundle the Codex CLI or an OpenAI account.
    or use the Marketplace package when available.
 4. Run the VSIX installer and follow its instructions for the desired Visual
    Studio instances.
-5. Open Visual Studio and choose `View > Codex`. The canonical command is
+5. Open Visual Studio and choose `View > Codex Community Connector`. The canonical command is
    `View.VisualCodexStudio` and can be assigned a keyboard shortcut.
 
 If authentication is missing, the extension's Account settings can open the
@@ -204,6 +209,13 @@ are configured; otherwise the workflow publishes a verified unsigned package.
 Visual Studio Marketplace publication is intentionally manual.
 
 ## Changelog
+
+### 1.3.7 - 2026-09-30
+
+- Renamed the extension to Codex Community Connector and updated the logo and author URL.
+- Corrected diff updates, model catalog pagination, Max/Ultra selection, provider authentication, and native executable discovery.
+- Preserved settings and command identities; added regression tests and packaged release notes.
+- See [CHANGELOG.md](CHANGELOG.md) for the complete release notes.
 
 ### 1.3.4 - 2026-07-22
 

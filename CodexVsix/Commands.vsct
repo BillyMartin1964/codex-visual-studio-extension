@@ -21,7 +21,7 @@
         <Parent guid="guidCodexCommandSet" id="MyMenuGroup" />
         <Icon guid="guidImages" id="bmpPic1" />
         <Strings>
-          <ButtonText>Codex</ButtonText>
+          <ButtonText>Codex Community Connector</ButtonText>
           <CommandName>View.VisualCodexStudio</CommandName>
           <LocCanonicalName>View.VisualCodexStudio</LocCanonicalName>
         </Strings>

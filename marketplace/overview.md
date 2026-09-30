@@ -1,8 +1,12 @@
-# Visual Codex Studio
+# Codex Community Connector
 
 Run Codex inside Visual Studio without leaving the IDE.
 
-`Visual Codex Studio` adds a docked Codex tool window to Visual Studio 2022 and 2026. It uses your local Codex CLI installation, keeps the conversation inside Visual Studio, and stays compatible with the active Visual Studio theme and the extension's current UI languages.
+`Codex Community Connector` adds a docked Codex tool window to Visual Studio 2022 and 2026. It uses your local Codex CLI installation, keeps the conversation inside Visual Studio, and stays compatible with the active Visual Studio theme and the extension's current UI languages.
+
+This is an independent community project. It is not affiliated with, endorsed by, or officially associated with OpenAI or ChatGPT.
+
+Author: [Rodrigo Jager](https://rodrigojager.com). [Source code](https://github.com/rodrigojager/codex-visual-studio-extension) · [Changelog](https://github.com/rodrigojager/codex-visual-studio-extension/blob/main/CHANGELOG.md).
 
 ## Highlights
 

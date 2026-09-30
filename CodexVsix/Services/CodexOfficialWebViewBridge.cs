@@ -54,6 +54,7 @@ internal sealed class CodexOfficialWebViewBridge : IDisposable
     private readonly Action<string>? _openSettings;
     private readonly Action<JToken>? _broadcastQueryInvalidation;
     private readonly bool _isSettingsSurface;
+    private readonly CodexDiffArtifactController _diffArtifacts;
     private readonly Action<string>? _routeChanged;
     private bool _disposed;
 
@@ -72,6 +73,14 @@ internal sealed class CodexOfficialWebViewBridge : IDisposable
         _broadcastQueryInvalidation = broadcastQueryInvalidation;
         _isSettingsSurface = isSettingsSurface;
         _routeChanged = routeChanged;
+        _diffArtifacts = new CodexDiffArtifactController(
+            Path.Combine(Path.GetTempPath(), "CodexVsix", "artifacts"),
+            _solutionContextService.TryUpdateOpenTextDocument,
+            path =>
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                _solutionContextService.OpenFileInVisualStudio(path);
+            });
         _appServerRequestRelay = new CodexAppServerRequestRelay(Post);
         _appServerRequestForwarder = _appServerRequestRelay.ForwardAsync;
         _historyWindowController = new CodexWebViewHistoryWindowController(PostHistoryWindowStatus);
@@ -270,9 +279,14 @@ internal sealed class CodexOfficialWebViewBridge : IDisposable
 
             case "show-diff":
             case "update-diff-if-open":
-                await OpenTextArtifactAsync(
-                    message["unifiedDiff"]?.Value<string>(),
-                    ".diff").ConfigureAwait(false);
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+                if (_disposed) return;
+                var diffKey = message["conversationId"]?.Value<string>()
+                    ?? message["threadId"]?.Value<string>() ?? string.Empty;
+                if (type == "show-diff")
+                    _diffArtifacts.Show(diffKey, message["unifiedDiff"]?.Value<string>());
+                else
+                    _diffArtifacts.UpdateIfOpen(diffKey, message["unifiedDiff"]?.Value<string>());
                 return;
 
             case "show-plan-summary":
