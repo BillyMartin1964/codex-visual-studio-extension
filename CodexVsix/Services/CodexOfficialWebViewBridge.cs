@@ -73,6 +73,7 @@ internal sealed class CodexOfficialWebViewBridge : IDisposable
         _broadcastQueryInvalidation = broadcastQueryInvalidation;
         _isSettingsSurface = isSettingsSurface;
         _routeChanged = routeChanged;
+        //Debug.WriteLine("[CodexVsix permissions] diagnostic hook active; guardian-approvals is expected when Statsig is enabled and server requirements allow it.");
         _diffArtifacts = new CodexDiffArtifactController(
             Path.Combine(Path.GetTempPath(), "CodexVsix", "artifacts"),
             _solutionContextService.TryUpdateOpenTextDocument,
@@ -95,6 +96,7 @@ internal sealed class CodexOfficialWebViewBridge : IDisposable
                     cancellationToken).ConfigureAwait(false);
             },
             LogInformation);
+        _processService.MissingExecutableHandler ??= CodexCliInstaller.EnsureInstalledAsync;
         _processService.AppServerNotificationReceived += OnAppServerNotificationReceived;
     }
 
@@ -580,10 +582,10 @@ internal sealed class CodexOfficialWebViewBridge : IDisposable
                 return PathsExist(values);
 
             case "pick-files":
-                return await PickFilesAsync(values, allowMultiple: true).ConfigureAwait(false);
+                return await PickFilesAsync(values, allowMultiple: true, cancellationToken).ConfigureAwait(false);
 
             case "pick-file":
-                return await PickFilesAsync(values, allowMultiple: false).ConfigureAwait(false);
+                return await PickFilesAsync(values, allowMultiple: false, cancellationToken).ConfigureAwait(false);
 
             case "ide-context":
                 return await BuildIdeContextAsync(values).ConfigureAwait(false);
@@ -679,10 +681,20 @@ internal sealed class CodexOfficialWebViewBridge : IDisposable
                 return await TryInvokeAppServerAsync("account/read", values, cancellationToken).ConfigureAwait(false);
 
             case "read-config-for-host":
-                return await TryInvokeAppServerAsync("config/read", values, cancellationToken).ConfigureAwait(false);
+            {
+                var config = await TryInvokeAppServerAsync("config/read", values, cancellationToken).ConfigureAwait(false);
+                LogInformation("config/read response: " + config?.ToString(Newtonsoft.Json.Formatting.None));
+                //Debug.WriteLine("[CodexVsix permissions] config/read: " + config?.ToString(Formatting.None));
+                return config;
+            }
 
             case "get-config-requirements-for-host":
-                return await TryInvokeAppServerAsync("configRequirements/read", values, cancellationToken).ConfigureAwait(false);
+            {
+                var requirements = await TryInvokeAppServerAsync("configRequirements/read", values, cancellationToken).ConfigureAwait(false);
+                LogInformation("configRequirements/read response: " + requirements?.ToString(Newtonsoft.Json.Formatting.None));
+                //Debug.WriteLine(DescribeGuardianApprovalRequirements(requirements));
+                return requirements;
+            }
 
             case "list-mcp-server-status":
                 return await TryInvokeAppServerAsync("mcpServerStatus/list", values, cancellationToken).ConfigureAwait(false);
@@ -1376,24 +1388,126 @@ internal sealed class CodexOfficialWebViewBridge : IDisposable
         };
     }
 
-    private async Task<JObject> PickFilesAsync(JObject values, bool allowMultiple)
+    private async Task<JObject> PickFilesAsync(
+        JObject values,
+        bool allowMultiple,
+        CancellationToken cancellationToken)
     {
-        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-        var dialog = new OpenFileDialog
+        Process? pickerProcess = null;
+        try
         {
-            Multiselect = allowMultiple,
-            Title = values["pickerTitle"]?.Value<string>() ?? (allowMultiple ? "Select files" : "Select file"),
-            Filter = values["imagesOnly"]?.Value<bool>() == true
-                ? "Images|*.png;*.jpg;*.jpeg;*.gif;*.webp|All files|*.*"
-                : "All files|*.*"
-        };
-        var accepted = dialog.ShowDialog() == true;
-        var files = accepted
-            ? dialog.FileNames.Select(ToPickedFile).ToArray()
-            : Array.Empty<JObject>();
-        return allowMultiple
-            ? new JObject { ["files"] = new JArray(files) }
-            : new JObject { ["file"] = files.FirstOrDefault() };
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+            var imagesOnly = values["imagesOnly"]?.Value<bool>() == true;
+            Debug.WriteLine("[CodexVsix picker] opening file dialog; multiple=" + allowMultiple
+                + "; imagesOnly=" + imagesOnly);
+
+            var request = new JObject
+            {
+                ["allowMultiple"] = allowMultiple,
+                ["imagesOnly"] = imagesOnly,
+                ["title"] = values["pickerTitle"]?.Value<string>() ?? (allowMultiple ? "Select files" : "Select file")
+            };
+
+            var encodedRequest = Convert.ToBase64String(Encoding.UTF8.GetBytes(request.ToString(Formatting.None)));
+            var script = BuildIsolatedFilePickerScript(encodedRequest);
+            var encodedScript = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
+            var powershellPath = Path.Combine(
+                Environment.SystemDirectory,
+                "WindowsPowerShell",
+                "v1.0",
+                "powershell.exe");
+            if (!File.Exists(powershellPath))
+            {
+                throw new FileNotFoundException("Windows PowerShell could not be found for the isolated file picker.", powershellPath);
+            }
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = powershellPath,
+                Arguments = "-NoLogo -NoProfile -NonInteractive -STA -EncodedCommand " + encodedScript,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            pickerProcess = Process.Start(startInfo)
+                ?? throw new InvalidOperationException("The isolated file picker process could not be started.");
+            Debug.WriteLine("[CodexVsix picker] isolated picker process started; pid=" + pickerProcess.Id);
+
+            using (cancellationToken.Register(() =>
+            {
+                try
+                {
+                    if (!pickerProcess.HasExited)
+                    {
+                        pickerProcess.Kill();
+                    }
+                }
+                catch
+                {
+                    // The helper may exit at the same time the request is canceled.
+                }
+            }))
+            {
+                var standardOutputTask = pickerProcess.StandardOutput.ReadToEndAsync();
+                var standardErrorTask = pickerProcess.StandardError.ReadToEndAsync();
+                await Task.Run(() => pickerProcess.WaitForExit(), cancellationToken).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var standardOutput = await standardOutputTask.ConfigureAwait(false);
+                var standardError = await standardErrorTask.ConfigureAwait(false);
+                Debug.WriteLine("[CodexVsix picker] isolated picker process exited; code=" + pickerProcess.ExitCode);
+                if (pickerProcess.ExitCode != 0)
+                {
+                    throw new InvalidOperationException(
+                        "The isolated file picker exited unexpectedly (exit code "
+                        + pickerProcess.ExitCode.ToString(CultureInfo.InvariantCulture) + "). "
+                        + CodexDiagnosticLogger.SanitizeText(standardError));
+                }
+
+                var pickerResult = JObject.Parse(standardOutput);
+                var accepted = pickerResult["accepted"]?.Value<bool>() == true;
+                var files = accepted
+                    ? (pickerResult["files"] as JArray ?? new JArray())
+                        .Values<string>()
+                        .Where(path => !string.IsNullOrWhiteSpace(path))
+                        .Select(path => ToPickedFile(path!))
+                        .ToArray()
+                    : Array.Empty<JObject>();
+                Debug.WriteLine("[CodexVsix picker] dialog " + (accepted ? "accepted" : "canceled")
+                    + "; selectedCount=" + files.Length);
+
+                return allowMultiple
+                    ? new JObject { ["files"] = new JArray(files) }
+                    : new JObject { ["file"] = files.FirstOrDefault() };
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine("[CodexVsix picker] failed: " + ex);
+            throw;
+        }
+        finally
+        {
+            pickerProcess?.Dispose();
+        }
+    }
+
+    private static string BuildIsolatedFilePickerScript(string encodedRequest)
+    {
+        return "$ErrorActionPreference='Stop';"
+            + "Add-Type -AssemblyName PresentationFramework;"
+            + "$request=ConvertFrom-Json ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('"
+            + encodedRequest
+            + "')));"
+            + "$dialog=New-Object Microsoft.Win32.OpenFileDialog;"
+            + "$dialog.Multiselect=[bool]$request.allowMultiple;"
+            + "$dialog.Title=[string]$request.title;"
+            + "$dialog.Filter='All files|*.*';"
+            + "if([bool]$request.imagesOnly){$dialog.Filter='Images|*.png;*.jpg;*.jpeg;*.gif;*.webp|All files|*.*'};"
+            + "$accepted=$dialog.ShowDialog() -eq $true;"
+            + "$files=@();if($accepted){$files=@($dialog.FileNames)};"
+            + "@{accepted=$accepted;files=$files}|ConvertTo-Json -Compress -Depth 3|Write-Output";
     }
 
     private async Task<JObject> BuildWorkspaceRootsAsync()
@@ -1626,6 +1740,15 @@ internal sealed class CodexOfficialWebViewBridge : IDisposable
         var syntheticResponse = TryBuildSyntheticFetchResponse(resolvedUri);
         if (syntheticResponse is not null)
         {
+            if (resolvedUri.AbsolutePath.EndsWith("/wham/statsig/bootstrap", StringComparison.Ordinal)
+                || (string.Equals(resolvedUri.Host, "ab.chatgpt.com", StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(resolvedUri.AbsolutePath, "/v1/initialize", StringComparison.Ordinal)))
+            {
+                Debug.WriteLine("[CodexVsix permissions] synthetic Statsig response served for "
+                    + resolvedUri.Host + resolvedUri.AbsolutePath
+                    + "; guardian_approval=true");
+            }
+
             return syntheticResponse;
         }
 
@@ -1764,6 +1887,11 @@ internal sealed class CodexOfficialWebViewBridge : IDisposable
         if (string.Equals(uri.Host, "ab.chatgpt.com", StringComparison.OrdinalIgnoreCase)
             && path.StartsWith("/v1/", StringComparison.Ordinal))
         {
+            if (string.Equals(path, "/v1/initialize", StringComparison.Ordinal))
+            {
+                return BuildStatsigInitializeResponse();
+            }
+
             return BuildNoStatsigUpdatesResponse();
         }
 
@@ -1795,13 +1923,67 @@ internal sealed class CodexOfficialWebViewBridge : IDisposable
             case "/wham/environments":
                 return new JArray();
             case "/wham/onboarding/context":
-            case "/wham/statsig/bootstrap":
                 return new JObject();
+            case "/wham/statsig/bootstrap":
+                var statsigPayload = new JObject
+                {
+                    ["user"] = new JObject(),
+                    // The extension runs an offline Statsig client. Keep this default feature
+                    // enabled even when the bootstrap response has no server supplied values.
+                    ["feature_gates"] = new JObject
+                    {
+                        ["3902016271"] = new JObject
+                        {
+                            ["name"] = "3902016271",
+                            ["value"] = true,
+                            ["rule_id"] = "visual-studio-default"
+                        }
+                    },
+                    ["dynamic_configs"] = new JObject
+                    {
+                        ["107580212"] = new JObject
+                        {
+                            ["name"] = "statsig_default_enable_features",
+                            ["value"] = new JObject { ["guardian_approval"] = true },
+                            ["rule_id"] = "visual-studio-default"
+                        }
+                    },
+                    ["layer_configs"] = new JObject(),
+                    ["param_stores"] = new JObject()
+                };
+                return new JObject
+                {
+                    ["statsigPayload"] = statsigPayload.ToString(Formatting.None)
+                };
             default:
                 return whamPath.EndsWith("/mark_read", StringComparison.Ordinal)
                     ? new JObject { ["ok"] = true }
                     : JValue.CreateNull();
         }
+    }
+
+    private static string DescribeGuardianApprovalRequirements(JToken? requirements)
+    {
+        var allowedSandboxModes = requirements?["allowedSandboxModes"] as JArray;
+        var allowedApprovalPolicies = requirements?["allowedApprovalPolicies"] as JArray;
+        var allowedReviewers = requirements?["allowedApprovalsReviewers"] as JArray;
+
+        var sandboxAllowed = allowedSandboxModes is null
+            || allowedSandboxModes.Values<string>().Contains("workspace-write", StringComparer.Ordinal);
+        var approvalAllowed = allowedApprovalPolicies is null
+            || allowedApprovalPolicies.Any(policy =>
+                policy?.Type == JTokenType.String && policy.Value<string>() == "on-request");
+        var reviewerAllowed = allowedReviewers is null
+            || allowedReviewers.Values<string>().Any(reviewer =>
+                reviewer is "guardian_subagent" or "auto_review");
+        var supportedByRequirements = sandboxAllowed && approvalAllowed && reviewerAllowed;
+
+        return "[CodexVsix permissions] guardian-approvals "
+            + (supportedByRequirements ? "allowed" : "FILTERED OUT")
+            + "; workspace-write=" + (sandboxAllowed ? "allowed" : "denied")
+            + "; on-request=" + (approvalAllowed ? "allowed" : "denied")
+            + "; guardian_subagent/auto_review=" + (reviewerAllowed ? "allowed" : "denied")
+            + "; raw=" + (requirements?.ToString(Formatting.None) ?? "null");
     }
 
     internal static Uri ResolveProxyUri(string url)
@@ -1829,6 +2011,35 @@ internal sealed class CodexOfficialWebViewBridge : IDisposable
         {
             ["has_updates"] = false,
             ["time"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+        };
+    }
+
+    private static JObject BuildStatsigInitializeResponse()
+    {
+        return new JObject
+        {
+            ["has_updates"] = true,
+            ["time"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            ["feature_gates"] = new JObject
+            {
+                ["3902016271"] = new JObject
+                {
+                    ["name"] = "3902016271",
+                    ["value"] = true,
+                    ["rule_id"] = "visual-studio-default"
+                }
+            },
+            ["dynamic_configs"] = new JObject
+            {
+                ["107580212"] = new JObject
+                {
+                    ["name"] = "statsig_default_enable_features",
+                    ["value"] = new JObject { ["guardian_approval"] = true },
+                    ["rule_id"] = "visual-studio-default"
+                }
+            },
+            ["layer_configs"] = new JObject(),
+            ["param_stores"] = new JObject()
         };
     }
 

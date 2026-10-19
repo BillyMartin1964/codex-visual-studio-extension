@@ -21,6 +21,11 @@ public sealed class CodexOfficialWebViewBridgeTests
             new Uri("https://chatgpt.com/ces/v1/rgstr?secret-is-not-forwarded")));
         Assert.False(statsig["has_updates"]?.Value<bool>());
         Assert.True(statsig["time"]?.Value<long>() > 0);
+
+        var statsigInitialize = Assert.IsType<JObject>(CodexOfficialWebViewBridge.TryBuildSyntheticFetchResponse(
+            new Uri("https://ab.chatgpt.com/v1/initialize")));
+        Assert.True(statsigInitialize["has_updates"]?.Value<bool>());
+        Assert.True(statsigInitialize["dynamic_configs"]?["107580212"]?["value"]?["guardian_approval"]?.Value<bool>());
     }
 
     [Theory]
