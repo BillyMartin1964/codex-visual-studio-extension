@@ -1941,36 +1941,66 @@ public sealed class CodexToolWindowViewModel : INotifyPropertyChanged, IDisposab
 
     private void AddAttachment()
     {
-        var dialog = new OpenFileDialog
+        try
         {
-            Filter = _localization.AllFilesFilter,
-            Multiselect = true
-        };
-
-        if (dialog.ShowDialog() != true)
-        {
-            return;
-        }
-
-        foreach (var fileName in dialog.FileNames)
-        {
-            if (IsImageFile(fileName))
+            var dialog = new OpenFileDialog
             {
-                var info = new FileInfo(fileName);
-                if (info.Exists && info.Length <= 50L * 1024L * 1024L
-                    && !AttachedImages.Contains(fileName, StringComparer.OrdinalIgnoreCase))
+                Filter = _localization.AllFilesFilter,
+                Multiselect = true
+            };
+
+            if (dialog.ShowDialog() != true)
+            {
+                return;
+            }
+
+            foreach (var fileName in dialog.FileNames)
+            {
+                if (IsImageFile(fileName))
                 {
-                    AttachedImages.Add(fileName);
-                    SelectedImagePath = fileName;
+                    var info = new FileInfo(fileName);
+                    if (info.Exists && info.Length <= 50L * 1024L * 1024L
+                        && !AttachedImages.Contains(fileName, StringComparer.OrdinalIgnoreCase)
+                        && CanDecodeImage(fileName))
+                    {
+                        AttachedImages.Add(fileName);
+                        SelectedImagePath = fileName;
+                    }
+                }
+                else
+                {
+                    AppendFileReferenceToPrompt(fileName);
                 }
             }
-            else
-            {
-                AppendFileReferenceToPrompt(fileName);
-            }
-        }
 
-        UpdateContextEstimate();
+            UpdateContextEstimate();
+        }
+        catch (Exception ex)
+        {
+            AppendOutput("[image] could not attach the selected file: " + ex.Message + Environment.NewLine);
+            MessageBox.Show(
+                "The selected image could not be loaded. Please choose another image.",
+                "Image upload failed",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
+    }
+
+    private static bool CanDecodeImage(string path)
+    {
+        try
+        {
+            using var stream = File.OpenRead(path);
+            var decoder = BitmapDecoder.Create(
+                stream,
+                BitmapCreateOptions.PreservePixelFormat,
+                BitmapCacheOption.OnLoad);
+            return decoder.Frames.Count > 0;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 
     private void RemoveSelectedImage()

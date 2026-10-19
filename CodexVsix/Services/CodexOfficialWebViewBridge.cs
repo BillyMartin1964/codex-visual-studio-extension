@@ -1346,11 +1346,14 @@ internal sealed class CodexOfficialWebViewBridge : IDisposable
         };
     }
 
-    private JObject ReadBinaryFile(JObject values)
+    internal static JObject ReadBinaryFile(JObject values)
     {
+        var encoded = Convert.ToBase64String(File.ReadAllBytes(ResolveFilePath(values)));
         return new JObject
         {
-            ["data"] = Convert.ToBase64String(File.ReadAllBytes(ResolveFilePath(values)))
+            // The official renderer reads "contentsBase64"; "data" is kept for older callers.
+            ["contentsBase64"] = encoded,
+            ["data"] = encoded
         };
     }
 
@@ -2082,7 +2085,7 @@ internal sealed class CodexOfficialWebViewBridge : IDisposable
         return Path.GetFullPath(path);
     }
 
-    private static JObject ToPickedFile(string path)
+    internal static JObject ToPickedFile(string path)
     {
         var fullPath = Path.GetFullPath(path);
         return new JObject

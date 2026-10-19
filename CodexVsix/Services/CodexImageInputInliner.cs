@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Text.RegularExpressions;
 using Newtonsoft.Json.Linq;
 
 namespace CodexVsix.Services;
@@ -62,6 +64,7 @@ internal static class CodexImageInputInliner
 
 		var result = (JObject)source.DeepClone();
 		var input = (JArray)result["input"]!;
+		AppendMentionedImageFiles(input, workingDirectory);
 		for (var index = 0; index < input.Count; index++)
 		{
 			if (input[index] is not JObject item)
@@ -97,6 +100,70 @@ internal static class CodexImageInputInliner
 		}
 
 		return result;
+	}
+
+	private static readonly Regex MentionedFileLine = new(
+		@"^##\s+.+?:\s+(?<path>.+?)\s*(\((lines\s+\d+-\d+|line\s+\d+)\))?\s*$",
+		RegexOptions.Compiled);
+
+	private static readonly string[] ImageExtensions = { ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp" };
+
+	/// <summary>
+	/// Files picked with the + button reach the host only as text lines under
+	/// "# Files mentioned by the user:" ("## label: path"). Image files among them are appended
+	/// as inline images so the model gets the pixels instead of a path it cannot open.
+	/// </summary>
+	private static void AppendMentionedImageFiles(JArray input, string workingDirectory)
+	{
+		const string header = "# Files mentioned by the user:";
+		var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+		var additions = new List<JObject>();
+		foreach (var item in input)
+		{
+			if (!string.Equals(item?["type"]?.Value<string>(), "text", StringComparison.Ordinal))
+			{
+				continue;
+			}
+
+			var text = item!["text"]?.Value<string>();
+			var start = text?.IndexOf(header, StringComparison.Ordinal) ?? -1;
+			if (text is null || start < 0)
+			{
+				continue;
+			}
+
+			var end = text.IndexOf("## My request for Codex:", start, StringComparison.Ordinal);
+			var section = end < 0 ? text.Substring(start + header.Length) : text.Substring(start + header.Length, end - start - header.Length);
+			foreach (var rawLine in section.Split('\n'))
+			{
+				var line = rawLine.Trim();
+				if (line.Length == 0)
+				{
+					continue;
+				}
+
+				var match = MentionedFileLine.Match(line);
+				if (!match.Success)
+				{
+					break;
+				}
+
+				var path = ResolvePath(match.Groups["path"].Value, workingDirectory);
+				if (Array.IndexOf(ImageExtensions, Path.GetExtension(path).ToLowerInvariant()) < 0
+					|| !File.Exists(path)
+					|| !seen.Add(path))
+				{
+					continue;
+				}
+
+				additions.Add(CreateInlineImage(path));
+			}
+		}
+
+		foreach (var addition in additions)
+		{
+			input.Add(addition);
+		}
 	}
 
 	private static string? FirstString(JObject item, params string[] names)
