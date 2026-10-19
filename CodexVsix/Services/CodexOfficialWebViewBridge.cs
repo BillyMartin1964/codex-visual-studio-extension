@@ -73,6 +73,7 @@ internal sealed class CodexOfficialWebViewBridge : IDisposable
         _broadcastQueryInvalidation = broadcastQueryInvalidation;
         _isSettingsSurface = isSettingsSurface;
         _routeChanged = routeChanged;
+        //Debug.WriteLine("[CodexVsix permissions] diagnostic hook active; guardian-approvals is expected when Statsig is enabled and server requirements allow it.");
         _diffArtifacts = new CodexDiffArtifactController(
             Path.Combine(Path.GetTempPath(), "CodexVsix", "artifacts"),
             _solutionContextService.TryUpdateOpenTextDocument,
@@ -679,10 +680,20 @@ internal sealed class CodexOfficialWebViewBridge : IDisposable
                 return await TryInvokeAppServerAsync("account/read", values, cancellationToken).ConfigureAwait(false);
 
             case "read-config-for-host":
-                return await TryInvokeAppServerAsync("config/read", values, cancellationToken).ConfigureAwait(false);
+            {
+                var config = await TryInvokeAppServerAsync("config/read", values, cancellationToken).ConfigureAwait(false);
+                LogInformation("config/read response: " + config?.ToString(Newtonsoft.Json.Formatting.None));
+                //Debug.WriteLine("[CodexVsix permissions] config/read: " + config?.ToString(Formatting.None));
+                return config;
+            }
 
             case "get-config-requirements-for-host":
-                return await TryInvokeAppServerAsync("configRequirements/read", values, cancellationToken).ConfigureAwait(false);
+            {
+                var requirements = await TryInvokeAppServerAsync("configRequirements/read", values, cancellationToken).ConfigureAwait(false);
+                LogInformation("configRequirements/read response: " + requirements?.ToString(Newtonsoft.Json.Formatting.None));
+                //Debug.WriteLine(DescribeGuardianApprovalRequirements(requirements));
+                return requirements;
+            }
 
             case "list-mcp-server-status":
                 return await TryInvokeAppServerAsync("mcpServerStatus/list", values, cancellationToken).ConfigureAwait(false);
@@ -1626,6 +1637,15 @@ internal sealed class CodexOfficialWebViewBridge : IDisposable
         var syntheticResponse = TryBuildSyntheticFetchResponse(resolvedUri);
         if (syntheticResponse is not null)
         {
+            if (resolvedUri.AbsolutePath.EndsWith("/wham/statsig/bootstrap", StringComparison.Ordinal)
+                || (string.Equals(resolvedUri.Host, "ab.chatgpt.com", StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(resolvedUri.AbsolutePath, "/v1/initialize", StringComparison.Ordinal)))
+            {
+                Debug.WriteLine("[CodexVsix permissions] synthetic Statsig response served for "
+                    + resolvedUri.Host + resolvedUri.AbsolutePath
+                    + "; guardian_approval=true");
+            }
+
             return syntheticResponse;
         }
 
@@ -1764,6 +1784,11 @@ internal sealed class CodexOfficialWebViewBridge : IDisposable
         if (string.Equals(uri.Host, "ab.chatgpt.com", StringComparison.OrdinalIgnoreCase)
             && path.StartsWith("/v1/", StringComparison.Ordinal))
         {
+            if (string.Equals(path, "/v1/initialize", StringComparison.Ordinal))
+            {
+                return BuildStatsigInitializeResponse();
+            }
+
             return BuildNoStatsigUpdatesResponse();
         }
 
@@ -1795,13 +1820,67 @@ internal sealed class CodexOfficialWebViewBridge : IDisposable
             case "/wham/environments":
                 return new JArray();
             case "/wham/onboarding/context":
-            case "/wham/statsig/bootstrap":
                 return new JObject();
+            case "/wham/statsig/bootstrap":
+                var statsigPayload = new JObject
+                {
+                    ["user"] = new JObject(),
+                    // The extension runs an offline Statsig client. Keep this default feature
+                    // enabled even when the bootstrap response has no server supplied values.
+                    ["feature_gates"] = new JObject
+                    {
+                        ["3902016271"] = new JObject
+                        {
+                            ["name"] = "3902016271",
+                            ["value"] = true,
+                            ["rule_id"] = "visual-studio-default"
+                        }
+                    },
+                    ["dynamic_configs"] = new JObject
+                    {
+                        ["107580212"] = new JObject
+                        {
+                            ["name"] = "statsig_default_enable_features",
+                            ["value"] = new JObject { ["guardian_approval"] = true },
+                            ["rule_id"] = "visual-studio-default"
+                        }
+                    },
+                    ["layer_configs"] = new JObject(),
+                    ["param_stores"] = new JObject()
+                };
+                return new JObject
+                {
+                    ["statsigPayload"] = statsigPayload.ToString(Formatting.None)
+                };
             default:
                 return whamPath.EndsWith("/mark_read", StringComparison.Ordinal)
                     ? new JObject { ["ok"] = true }
                     : JValue.CreateNull();
         }
+    }
+
+    private static string DescribeGuardianApprovalRequirements(JToken? requirements)
+    {
+        var allowedSandboxModes = requirements?["allowedSandboxModes"] as JArray;
+        var allowedApprovalPolicies = requirements?["allowedApprovalPolicies"] as JArray;
+        var allowedReviewers = requirements?["allowedApprovalsReviewers"] as JArray;
+
+        var sandboxAllowed = allowedSandboxModes is null
+            || allowedSandboxModes.Values<string>().Contains("workspace-write", StringComparer.Ordinal);
+        var approvalAllowed = allowedApprovalPolicies is null
+            || allowedApprovalPolicies.Any(policy =>
+                policy?.Type == JTokenType.String && policy.Value<string>() == "on-request");
+        var reviewerAllowed = allowedReviewers is null
+            || allowedReviewers.Values<string>().Any(reviewer =>
+                reviewer is "guardian_subagent" or "auto_review");
+        var supportedByRequirements = sandboxAllowed && approvalAllowed && reviewerAllowed;
+
+        return "[CodexVsix permissions] guardian-approvals "
+            + (supportedByRequirements ? "allowed" : "FILTERED OUT")
+            + "; workspace-write=" + (sandboxAllowed ? "allowed" : "denied")
+            + "; on-request=" + (approvalAllowed ? "allowed" : "denied")
+            + "; guardian_subagent/auto_review=" + (reviewerAllowed ? "allowed" : "denied")
+            + "; raw=" + (requirements?.ToString(Formatting.None) ?? "null");
     }
 
     internal static Uri ResolveProxyUri(string url)
@@ -1829,6 +1908,35 @@ internal sealed class CodexOfficialWebViewBridge : IDisposable
         {
             ["has_updates"] = false,
             ["time"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+        };
+    }
+
+    private static JObject BuildStatsigInitializeResponse()
+    {
+        return new JObject
+        {
+            ["has_updates"] = true,
+            ["time"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            ["feature_gates"] = new JObject
+            {
+                ["3902016271"] = new JObject
+                {
+                    ["name"] = "3902016271",
+                    ["value"] = true,
+                    ["rule_id"] = "visual-studio-default"
+                }
+            },
+            ["dynamic_configs"] = new JObject
+            {
+                ["107580212"] = new JObject
+                {
+                    ["name"] = "statsig_default_enable_features",
+                    ["value"] = new JObject { ["guardian_approval"] = true },
+                    ["rule_id"] = "visual-studio-default"
+                }
+            },
+            ["layer_configs"] = new JObject(),
+            ["param_stores"] = new JObject()
         };
     }
 
