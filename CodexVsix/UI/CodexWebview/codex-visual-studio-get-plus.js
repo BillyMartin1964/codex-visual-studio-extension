@@ -35,12 +35,17 @@
     }
   }
 
-  // The bundle hides footer labels at 440px (and 475/480px in its Electron mode); keep them visible down to 300px instead.
-  var labelSelector = '[class*="_labelSm_"],[class*="_labelXs_"],[class*="_secondaryLabel_"],'
-    + '[class*="_secondaryChevron_"],[class*="_footerLabel_"]';
+  // The top (grid) row keeps the bundle's 440px rule; the bottom "Work locally" row only holds two items,
+  // so its labels stay visible down to 200px instead (the bundle also hides them at 475/480px in Electron mode).
+  var bottomRow = '[class*="_footer_"]:not(.grid) ';
+  var labelSelector = ['_labelSm_', '_labelXs_', '_secondaryLabel_', '_secondaryChevron_']
+    .map(function (name) { return bottomRow + '[class*="' + name + '"]'; })
+    .join(',');
   var style = document.createElement('style');
-  style.textContent = '@container composer-footer (width>300px){' + labelSelector + '{display:inline !important}}'
-    + '@container composer-footer (width<=300px){' + labelSelector + '{display:none !important}}';
+  style.textContent = '@container composer-footer (width>200px){' + labelSelector + '{display:inline !important}}'
+    + '@container composer-footer (width<=200px){' + labelSelector + '{display:none !important}}'
+    + bottomRow + '> :not([' + LINK_ATTRIBUTE + ']){min-width:0;overflow:hidden}'
+    + bottomRow + '> [' + LINK_ATTRIBUTE + ']{flex:0 0 auto !important}';
   (document.head || document.documentElement).appendChild(style);
 
   setInterval(ensureLink, 500);
