@@ -112,4 +112,55 @@ public sealed class CodexProcessServiceContextTests
         Assert.Equal("Program.cs", mention["name"]?.Value<string>());
         Assert.Equal(filePath, mention["path"]?.Value<string>());
     }
+
+    [Fact]
+    public void ImageAttachmentIsSentInlineAsDataUrl()
+    {
+        using var temp = new TemporaryDirectory();
+        var imagePath = Path.Combine(temp.Path, "clipboard.png");
+        File.WriteAllBytes(imagePath, new byte[] { 1, 2, 3 });
+        using var service = new CodexProcessService();
+
+        var inputs = JArray.FromObject(service.BuildUserInput(
+            "describe this image",
+            new CodexExtensionSettings(),
+            temp.Path,
+            new[] { imagePath },
+            string.Empty));
+
+        var image = Assert.Single(
+            inputs.OfType<JObject>(),
+            item => item["type"]?.Value<string>() == "image");
+        Assert.Equal("data:image/png;base64," + Convert.ToBase64String(new byte[] { 1, 2, 3 }), image["url"]?.Value<string>());
+    }
+
+    [Fact]
+    public void ClipboardImageAttachmentIsSentInlineAsDataUrl()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "CodexVsixImages");
+        Directory.CreateDirectory(directory);
+        var imagePath = Path.Combine(directory, $"clipboard_{Guid.NewGuid():N}.png");
+        var bytes = new byte[] { 1, 2, 3, 4 };
+        File.WriteAllBytes(imagePath, bytes);
+
+        try
+        {
+            using var service = new CodexProcessService();
+            var inputs = JArray.FromObject(service.BuildUserInput(
+                "describe this image",
+                new CodexExtensionSettings(),
+                directory,
+                new[] { imagePath },
+                string.Empty));
+
+            var image = Assert.Single(
+                inputs.OfType<JObject>(),
+                item => item["type"]?.Value<string>() == "image");
+            Assert.Equal("data:image/png;base64," + Convert.ToBase64String(bytes), image["url"]?.Value<string>());
+        }
+        finally
+        {
+            File.Delete(imagePath);
+        }
+    }
 }

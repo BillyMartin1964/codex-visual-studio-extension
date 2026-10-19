@@ -1636,7 +1636,11 @@ public sealed class CodexToolWindowViewModel : INotifyPropertyChanged, IDisposab
 
     private bool CanSubmitPrompt()
     {
-        if (!IsCodexReady || string.IsNullOrWhiteSpace(BuildEffectivePrompt()))
+        // An image is a valid prompt input by itself. Requiring text here makes
+        // pasted/file attachments impossible to submit unless the user adds
+        // unrelated text, and leaves the attachment path out of the turn.
+        if (!IsCodexReady
+            || (string.IsNullOrWhiteSpace(BuildEffectivePrompt()) && AttachedImages.Count == 0))
         {
             return false;
         }
@@ -5108,12 +5112,31 @@ public sealed class CodexToolWindowViewModel : INotifyPropertyChanged, IDisposab
     {
         var directory = Path.Combine(Path.GetTempPath(), "CodexVsixImages");
         Directory.CreateDirectory(directory);
-        var path = Path.Combine(directory, $"clipboard_{DateTime.Now:yyyyMMdd_HHmmss_fff}.png");
+        // Clipboard images can be pasted repeatedly within the same millisecond.
+        // A unique name prevents a later paste from replacing an image that is
+        // already queued for submission.
+        var path = Path.Combine(directory, $"clipboard_{Guid.NewGuid():N}.png");
+
+        if (bitmapSource.CanFreeze)
+        {
+            bitmapSource.Freeze();
+        }
 
         var encoder = new PngBitmapEncoder();
         encoder.Frames.Add(BitmapFrame.Create(bitmapSource));
         using var stream = File.Create(path);
         encoder.Save(stream);
+
+        // Do not put an incomplete clipboard export into the composer. WPF can
+        // expose a clipboard bitmap whose backing data is no longer available;
+        // force a read while the source is still in scope so the user gets an
+        // error at paste time instead of an unreadable image at turn time.
+        stream.Flush(true);
+        if (stream.Length == 0)
+        {
+            throw new InvalidDataException("The clipboard image could not be encoded.");
+        }
+
         return path;
     }
 
@@ -5128,7 +5151,7 @@ public sealed class CodexToolWindowViewModel : INotifyPropertyChanged, IDisposab
             }
 
             var cutoff = DateTime.UtcNow.AddDays(-1);
-            foreach (var file in Directory.EnumerateFiles(directory, "clipboard_*.png", SearchOption.TopDirectoryOnly))
+        foreach (var file in Directory.EnumerateFiles(directory, "clipboard_*.png", SearchOption.TopDirectoryOnly))
             {
                 try
                 {
