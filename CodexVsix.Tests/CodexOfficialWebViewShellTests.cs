@@ -16,6 +16,7 @@ public sealed class CodexOfficialWebViewShellTests
         Assert.True(File.Exists(Path.Combine(resourceRoot, "codex-acquire-vscode-api-shim.js")));
         Assert.True(File.Exists(Path.Combine(resourceRoot, "codex-visual-studio-history-guard.js")));
         Assert.True(File.Exists(Path.Combine(resourceRoot, "codex-visual-studio-diagnostics.js")));
+        Assert.True(File.Exists(Path.Combine(resourceRoot, "codex-visual-studio-get-plus.js")));
         var theme = CodexVisualStudioTheme.Create(
             "test-dark",
             "dark",

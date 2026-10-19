@@ -1346,11 +1346,14 @@ internal sealed class CodexOfficialWebViewBridge : IDisposable
         };
     }
 
-    private JObject ReadBinaryFile(JObject values)
+    internal static JObject ReadBinaryFile(JObject values)
     {
+        var encoded = Convert.ToBase64String(File.ReadAllBytes(ResolveFilePath(values)));
         return new JObject
         {
-            ["data"] = Convert.ToBase64String(File.ReadAllBytes(ResolveFilePath(values)))
+            // The official renderer reads "contentsBase64"; "data" is kept for older callers.
+            ["contentsBase64"] = encoded,
+            ["data"] = encoded
         };
     }
 
@@ -1615,6 +1618,11 @@ internal sealed class CodexOfficialWebViewBridge : IDisposable
         }
 
         var resolvedUri = ResolveProxyUri(url!);
+        if (IsUsageUri(resolvedUri))
+        {
+            return await BuildUsageResponseAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         var syntheticResponse = TryBuildSyntheticFetchResponse(resolvedUri);
         if (syntheticResponse is not null)
         {
@@ -1666,6 +1674,83 @@ internal sealed class CodexOfficialWebViewBridge : IDisposable
         {
             return responseBody;
         }
+    }
+
+    private static bool IsUsageUri(Uri uri)
+    {
+        return string.Equals(uri.Host, "chatgpt.com", StringComparison.OrdinalIgnoreCase)
+            && uri.AbsolutePath.TrimEnd('/').EndsWith("/wham/usage", StringComparison.Ordinal);
+    }
+
+    private async Task<JToken?> BuildUsageResponseAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await _processService.InvokeAppServerRequestAsync(
+                _viewModel.Settings,
+                "account/rateLimits/read",
+                new JObject(),
+                cancellationToken).ConfigureAwait(false);
+            return ConvertRateLimitsToUsage(result) ?? (JToken)JValue.CreateNull();
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            return JValue.CreateNull();
+        }
+    }
+
+    internal static JObject? ConvertRateLimitsToUsage(JToken? response)
+    {
+        var snapshot = (response?["rateLimitsByLimitId"]?["codex"] ?? response?["rateLimits"]) as JObject;
+        if (snapshot is null)
+        {
+            return null;
+        }
+
+        var primary = ConvertRateLimitWindow(snapshot["primary"]);
+        var secondary = ConvertRateLimitWindow(snapshot["secondary"]);
+        var limitReached = (primary?["used_percent"]?.Value<double>() ?? 0) >= 100
+            || (secondary?["used_percent"]?.Value<double>() ?? 0) >= 100;
+
+        var usage = new JObject
+        {
+            ["plan_type"] = snapshot["planType"] ?? JValue.CreateNull(),
+            ["rate_limit"] = new JObject
+            {
+                ["allowed"] = !limitReached,
+                ["limit_reached"] = limitReached,
+                ["primary_window"] = (JToken?)primary ?? JValue.CreateNull(),
+                ["secondary_window"] = (JToken?)secondary ?? JValue.CreateNull()
+            }
+        };
+
+        if (snapshot["credits"] is JObject credits)
+        {
+            usage["credits"] = new JObject
+            {
+                ["has_credits"] = credits["hasCredits"] ?? false,
+                ["unlimited"] = credits["unlimited"] ?? false,
+                ["balance"] = credits["balance"] ?? JValue.CreateNull()
+            };
+        }
+
+        return usage;
+    }
+
+    private static JObject? ConvertRateLimitWindow(JToken? window)
+    {
+        if (window is not JObject source)
+        {
+            return null;
+        }
+
+        var minutes = source["windowDurationMins"]?.Value<double>();
+        return new JObject
+        {
+            ["used_percent"] = source["usedPercent"]?.Value<double>() ?? 0,
+            ["limit_window_seconds"] = minutes is null ? JValue.CreateNull() : minutes.Value * 60,
+            ["reset_at"] = source["resetsAt"] ?? JValue.CreateNull()
+        };
     }
 
     internal static JToken? TryBuildSyntheticFetchResponse(Uri uri)
@@ -2082,7 +2167,7 @@ internal sealed class CodexOfficialWebViewBridge : IDisposable
         return Path.GetFullPath(path);
     }
 
-    private static JObject ToPickedFile(string path)
+    internal static JObject ToPickedFile(string path)
     {
         var fullPath = Path.GetFullPath(path);
         return new JObject

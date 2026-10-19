@@ -252,6 +252,23 @@ public sealed class CodexOfficialWebViewBridgeTests
     }
 
     [Fact]
+    public void ConvertsAppServerRateLimitsToTheUsageShapeExpectedByTheWebView()
+    {
+        var response = JObject.Parse(
+            "{\"rateLimits\":{\"planType\":\"plus\",\"primary\":{\"usedPercent\":25,\"windowDurationMins\":300,\"resetsAt\":1700000000}," +
+            "\"secondary\":{\"usedPercent\":40,\"windowDurationMins\":10080,\"resetsAt\":1700500000}}}");
+
+        var usage = CodexOfficialWebViewBridge.ConvertRateLimitsToUsage(response);
+
+        Assert.NotNull(usage);
+        Assert.Equal("plus", usage!["plan_type"]?.Value<string>());
+        Assert.Equal(25, usage["rate_limit"]?["primary_window"]?["used_percent"]?.Value<double>());
+        Assert.Equal(18000, usage["rate_limit"]?["primary_window"]?["limit_window_seconds"]?.Value<double>());
+        Assert.Equal(1700500000, usage["rate_limit"]?["secondary_window"]?["reset_at"]?.Value<long>());
+        Assert.Null(CodexOfficialWebViewBridge.ConvertRateLimitsToUsage(new JObject()));
+    }
+
+    [Fact]
     public void LeavesUnrelatedNetworkRequestsForTheProxy()
     {
         Assert.Null(CodexOfficialWebViewBridge.TryBuildSyntheticFetchResponse(

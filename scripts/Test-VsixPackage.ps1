@@ -48,7 +48,8 @@ try {
         "UI\CodexWebview\webview\index.html",
         "UI\CodexWebview\codex-acquire-vscode-api-shim.js",
         "UI\CodexWebview\codex-visual-studio-history-guard.js",
-        "UI\CodexWebview\codex-visual-studio-diagnostics.js"
+        "UI\CodexWebview\codex-visual-studio-diagnostics.js",
+        "UI\CodexWebview\codex-visual-studio-get-plus.js"
     )
 
     foreach ($relativePath in $requiredFiles) {

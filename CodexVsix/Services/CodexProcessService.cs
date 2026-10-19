@@ -130,6 +130,7 @@ public sealed class CodexProcessService : IDisposable
                 parameters, cancellationToken).ConfigureAwait(false);
         }
 
+        parameters = CodexImageInputInliner.InlineImages(method, parameters, workingDirectory);
         return await SendRequestAsync(method, parameters, cancellationToken).ConfigureAwait(false);
     }
 
@@ -2075,6 +2076,23 @@ public sealed class CodexProcessService : IDisposable
         }
 
         var json = NewtonsoftJsonCompatibility.Serialize(message, Formatting.None);
+        if (string.Equals(message["method"]?.Value<string>(), "turn/start", StringComparison.Ordinal))
+        {
+            var inputs = message["params"]?["input"] as JArray;
+            _diagnostics.Write(
+                "appserver.turn.start.inputSummary",
+                new JObject
+                {
+                    ["inputCount"] = inputs?.Count ?? 0,
+                    ["textCount"] = inputs?.Count(item => item?["type"]?.Value<string>() == "text") ?? 0,
+                    ["imageCount"] = inputs?.Count(item => item?["type"]?.Value<string>() == "image") ?? 0,
+                    ["localImageCount"] = inputs?.Count(item => item?["type"]?.Value<string>() == "localImage") ?? 0,
+                    ["inlineImageDataLength"] = inputs?
+                        .Where(item => item?["type"]?.Value<string>() == "image")
+                        .Sum(item => item?["url"]?.Value<string>()?.Length ?? 0) ?? 0
+                });
+        }
+
         lock (_writeLock)
         {
             writer.WriteLine(json);
@@ -2397,11 +2415,7 @@ public sealed class CodexProcessService : IDisposable
 
         foreach (var imagePath in imagePaths.Where(path => !string.IsNullOrWhiteSpace(path)).Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            inputs.Add(new
-            {
-                type = "localImage",
-                path = Path.GetFullPath(imagePath)
-            });
+            inputs.Add(CodexImageInputInliner.CreateInlineImage(imagePath));
         }
 
         return inputs.ToArray();

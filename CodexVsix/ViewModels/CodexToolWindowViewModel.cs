@@ -1636,7 +1636,11 @@ public sealed class CodexToolWindowViewModel : INotifyPropertyChanged, IDisposab
 
     private bool CanSubmitPrompt()
     {
-        if (!IsCodexReady || string.IsNullOrWhiteSpace(BuildEffectivePrompt()))
+        // An image is a valid prompt input by itself. Requiring text here makes
+        // pasted/file attachments impossible to submit unless the user adds
+        // unrelated text, and leaves the attachment path out of the turn.
+        if (!IsCodexReady
+            || (string.IsNullOrWhiteSpace(BuildEffectivePrompt()) && AttachedImages.Count == 0))
         {
             return false;
         }
@@ -1937,36 +1941,66 @@ public sealed class CodexToolWindowViewModel : INotifyPropertyChanged, IDisposab
 
     private void AddAttachment()
     {
-        var dialog = new OpenFileDialog
+        try
         {
-            Filter = _localization.AllFilesFilter,
-            Multiselect = true
-        };
-
-        if (dialog.ShowDialog() != true)
-        {
-            return;
-        }
-
-        foreach (var fileName in dialog.FileNames)
-        {
-            if (IsImageFile(fileName))
+            var dialog = new OpenFileDialog
             {
-                var info = new FileInfo(fileName);
-                if (info.Exists && info.Length <= 50L * 1024L * 1024L
-                    && !AttachedImages.Contains(fileName, StringComparer.OrdinalIgnoreCase))
+                Filter = _localization.AllFilesFilter,
+                Multiselect = true
+            };
+
+            if (dialog.ShowDialog() != true)
+            {
+                return;
+            }
+
+            foreach (var fileName in dialog.FileNames)
+            {
+                if (IsImageFile(fileName))
                 {
-                    AttachedImages.Add(fileName);
-                    SelectedImagePath = fileName;
+                    var info = new FileInfo(fileName);
+                    if (info.Exists && info.Length <= 50L * 1024L * 1024L
+                        && !AttachedImages.Contains(fileName, StringComparer.OrdinalIgnoreCase)
+                        && CanDecodeImage(fileName))
+                    {
+                        AttachedImages.Add(fileName);
+                        SelectedImagePath = fileName;
+                    }
+                }
+                else
+                {
+                    AppendFileReferenceToPrompt(fileName);
                 }
             }
-            else
-            {
-                AppendFileReferenceToPrompt(fileName);
-            }
-        }
 
-        UpdateContextEstimate();
+            UpdateContextEstimate();
+        }
+        catch (Exception ex)
+        {
+            AppendOutput("[image] could not attach the selected file: " + ex.Message + Environment.NewLine);
+            MessageBox.Show(
+                "The selected image could not be loaded. Please choose another image.",
+                "Image upload failed",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
+    }
+
+    private static bool CanDecodeImage(string path)
+    {
+        try
+        {
+            using var stream = File.OpenRead(path);
+            var decoder = BitmapDecoder.Create(
+                stream,
+                BitmapCreateOptions.PreservePixelFormat,
+                BitmapCacheOption.OnLoad);
+            return decoder.Frames.Count > 0;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 
     private void RemoveSelectedImage()
@@ -5108,12 +5142,31 @@ public sealed class CodexToolWindowViewModel : INotifyPropertyChanged, IDisposab
     {
         var directory = Path.Combine(Path.GetTempPath(), "CodexVsixImages");
         Directory.CreateDirectory(directory);
-        var path = Path.Combine(directory, $"clipboard_{DateTime.Now:yyyyMMdd_HHmmss_fff}.png");
+        // Clipboard images can be pasted repeatedly within the same millisecond.
+        // A unique name prevents a later paste from replacing an image that is
+        // already queued for submission.
+        var path = Path.Combine(directory, $"clipboard_{Guid.NewGuid():N}.png");
+
+        if (bitmapSource.CanFreeze)
+        {
+            bitmapSource.Freeze();
+        }
 
         var encoder = new PngBitmapEncoder();
         encoder.Frames.Add(BitmapFrame.Create(bitmapSource));
         using var stream = File.Create(path);
         encoder.Save(stream);
+
+        // Do not put an incomplete clipboard export into the composer. WPF can
+        // expose a clipboard bitmap whose backing data is no longer available;
+        // force a read while the source is still in scope so the user gets an
+        // error at paste time instead of an unreadable image at turn time.
+        stream.Flush(true);
+        if (stream.Length == 0)
+        {
+            throw new InvalidDataException("The clipboard image could not be encoded.");
+        }
+
         return path;
     }
 
@@ -5128,7 +5181,7 @@ public sealed class CodexToolWindowViewModel : INotifyPropertyChanged, IDisposab
             }
 
             var cutoff = DateTime.UtcNow.AddDays(-1);
-            foreach (var file in Directory.EnumerateFiles(directory, "clipboard_*.png", SearchOption.TopDirectoryOnly))
+        foreach (var file in Directory.EnumerateFiles(directory, "clipboard_*.png", SearchOption.TopDirectoryOnly))
             {
                 try
                 {

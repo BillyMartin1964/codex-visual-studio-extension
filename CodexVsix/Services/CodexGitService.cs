@@ -367,6 +367,8 @@ internal sealed class CodexGitService
             return new JObject
             {
                 ["isRepo"] = false,
+                ["root"] = JValue.CreateNull(),
+                ["commonDir"] = JValue.CreateNull(),
                 ["gitRoot"] = JValue.CreateNull(),
                 ["branch"] = JValue.CreateNull(),
                 ["defaultBranch"] = JValue.CreateNull(),
@@ -380,9 +382,16 @@ internal sealed class CodexGitService
         var defaultBranch = await DefaultBranchAsync(root, cancellationToken).ConfigureAwait(false);
         var upstream = await UpstreamBranchAsync(root, cancellationToken).ConfigureAwait(false);
         var counts = await GetAheadBehindAsync(root, cancellationToken).ConfigureAwait(false);
+        var commonDirResult = await RunGitAsync(
+            root,
+            new[] { "rev-parse", "--path-format=absolute", "--git-common-dir" },
+            cancellationToken).ConfigureAwait(false);
+        var commonDir = commonDirResult.Success ? NullIfEmpty(commonDirResult.Stdout) : null;
         return new JObject
         {
             ["isRepo"] = true,
+            ["root"] = root,
+            ["commonDir"] = commonDir ?? Path.Combine(root, ".git"),
             ["gitRoot"] = root,
             ["branch"] = ToNullableValue(branch),
             ["defaultBranch"] = ToNullableValue(defaultBranch),

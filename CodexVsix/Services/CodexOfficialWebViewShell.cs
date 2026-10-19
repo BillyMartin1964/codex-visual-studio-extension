@@ -77,10 +77,12 @@ internal static class CodexOfficialWebViewShell
         var shimPath = Path.Combine(resourceRoot, "codex-acquire-vscode-api-shim.js");
         var historyGuardPath = Path.Combine(resourceRoot, "codex-visual-studio-history-guard.js");
         var diagnosticsPath = Path.Combine(resourceRoot, "codex-visual-studio-diagnostics.js");
+        var getPlusPath = Path.Combine(resourceRoot, "codex-visual-studio-get-plus.js");
         if (!File.Exists(indexPath)
             || !File.Exists(shimPath)
             || !File.Exists(historyGuardPath)
-            || !File.Exists(diagnosticsPath))
+            || !File.Exists(diagnosticsPath)
+            || !File.Exists(getPlusPath))
         {
             var missingPath = !File.Exists(indexPath)
                 ? indexPath
@@ -88,7 +90,9 @@ internal static class CodexOfficialWebViewShell
                     ? shimPath
                     : !File.Exists(historyGuardPath)
                         ? historyGuardPath
-                        : diagnosticsPath;
+                        : !File.Exists(diagnosticsPath)
+                            ? diagnosticsPath
+                            : getPlusPath;
             throw new FileNotFoundException("The bundled Codex webview is incomplete.", missingPath);
         }
 
@@ -128,12 +132,14 @@ internal static class CodexOfficialWebViewShell
         var shim = AdaptShimForWebView2(File.ReadAllText(shimPath));
         var historyGuard = File.ReadAllText(historyGuardPath);
         var diagnostics = File.ReadAllText(diagnosticsPath);
+        var getPlus = File.ReadAllText(getPlusPath);
         var injection = "<style>" + theme.ToCss() + "</style>\n"
             + ThemeAdapter + "\n"
             + WebView2TransportAdapter + "\n"
             + "<script>" + shim + "</script>\n"
             + "<script>" + historyGuard + "</script>\n"
-            + "<script>" + diagnostics + "</script>\n";
+            + "<script>" + diagnostics + "</script>\n"
+            + "<script>" + getPlus + "</script>\n";
         html = Regex.Replace(
             html,
             "(<script\\b(?=[^>]*\\btype=([\"'])module\\2)[^>]*>)",
