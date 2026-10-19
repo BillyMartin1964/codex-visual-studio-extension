@@ -96,6 +96,7 @@ internal sealed class CodexOfficialWebViewBridge : IDisposable
                     cancellationToken).ConfigureAwait(false);
             },
             LogInformation);
+        _processService.MissingExecutableHandler ??= CodexCliInstaller.EnsureInstalledAsync;
         _processService.AppServerNotificationReceived += OnAppServerNotificationReceived;
     }
 

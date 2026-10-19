@@ -1,0 +1,213 @@
+using System;
+using System.Diagnostics;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using CodexVsix.Models;
+using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Shell.Interop;
+using Newtonsoft.Json.Linq;
+
+namespace CodexVsix.Services;
+
+internal static class CodexCliInstaller
+{
+	private const int IdYes = 6;
+	private static readonly TimeSpan InstallTimeout = TimeSpan.FromMinutes(5);
+	private static readonly TimeSpan DeclineCooldown = TimeSpan.FromMinutes(10);
+	private static readonly SemaphoreSlim Gate = new(1, 1);
+	private static DateTime _lastDeclinedUtc = DateTime.MinValue;
+
+	// Returns true when a Codex executable can be resolved afterwards (already present or just installed).
+	public static async Task<bool> EnsureInstalledAsync(CodexExtensionSettings settings, bool userInitiated, CancellationToken cancellationToken)
+	{
+		await Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+		try
+		{
+			if (IsResolvable(settings))
+			{
+				return true;
+			}
+
+			if (!userInitiated && DateTime.UtcNow - _lastDeclinedUtc < DeclineCooldown)
+			{
+				return false;
+			}
+
+			var hasNpm = await RunAsync("npm --version", settings, TimeSpan.FromSeconds(20), cancellationToken).ConfigureAwait(false);
+			var accepted = await AskUserAsync(hasNpm.Success, cancellationToken).ConfigureAwait(false);
+			if (!accepted)
+			{
+				_lastDeclinedUtc = DateTime.UtcNow;
+				Log("cli.install.declined", hasNpm.Success ? "user-declined" : "npm-missing");
+				return false;
+			}
+
+			Log("cli.install.started", CodexEnvironmentService.FallbackInstallCommand);
+			await SetStatusAsync("Installing Codex CLI (usually under a minute)...", true, cancellationToken).ConfigureAwait(false);
+			(bool Success, string Output) install;
+			try
+			{
+				install = await RunAsync(CodexEnvironmentService.FallbackInstallCommand, settings, InstallTimeout, cancellationToken).ConfigureAwait(false);
+			}
+			finally
+			{
+				await SetStatusAsync(string.Empty, false, CancellationToken.None).ConfigureAwait(false);
+			}
+
+			Log(install.Success ? "cli.install.succeeded" : "cli.install.failed", Truncate(install.Output, 1500));
+
+			if (install.Success && IsResolvable(settings))
+			{
+				return true;
+			}
+
+			await ShowMessageAsync(
+				"Codex CLI installation did not complete." + Environment.NewLine + Environment.NewLine
+				+ "Run this command in a terminal, then try again:" + Environment.NewLine
+				+ CodexEnvironmentService.FallbackInstallCommand,
+				OLEMSGBUTTON.OLEMSGBUTTON_OK,
+				cancellationToken).ConfigureAwait(false);
+			return false;
+		}
+		finally
+		{
+			Gate.Release();
+		}
+	}
+
+	private static bool IsResolvable(CodexExtensionSettings settings)
+	{
+		return !string.IsNullOrWhiteSpace(
+			CodexExecutableResolver.ResolveExecutableLocation(settings.CodexExecutablePath, settings.EnvironmentVariables));
+	}
+
+	private static async Task<bool> AskUserAsync(bool hasNpm, CancellationToken cancellationToken)
+	{
+		if (!hasNpm)
+		{
+			await ShowMessageAsync(
+				"The Codex CLI is required to sign in and use Codex, but it was not found, and npm (Node.js) is not available to install it." + Environment.NewLine + Environment.NewLine
+				+ "Install Node.js from https://nodejs.org, then run:" + Environment.NewLine
+				+ CodexEnvironmentService.FallbackInstallCommand,
+				OLEMSGBUTTON.OLEMSGBUTTON_OK,
+				cancellationToken).ConfigureAwait(false);
+			return false;
+		}
+
+		var result = await ShowMessageAsync(
+			"The Codex CLI is required to sign in and use Codex, but it was not found on your system." + Environment.NewLine + Environment.NewLine
+			+ "Would you like the Codex extension to install it automatically?" + Environment.NewLine
+			+ "(Command: " + CodexEnvironmentService.FallbackInstallCommand + ")" + Environment.NewLine + Environment.NewLine
+			+ "Installation usually takes under a minute. An \"Installing Codex CLI\" message will show in the status bar at the bottom while it runs.",
+			OLEMSGBUTTON.OLEMSGBUTTON_YESNO,
+			cancellationToken).ConfigureAwait(false);
+		return result == IdYes;
+	}
+
+	private static async Task SetStatusAsync(string text, bool animate, CancellationToken cancellationToken)
+	{
+		await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+		if (Package.GetGlobalService(typeof(SVsStatusbar)) is not IVsStatusbar statusBar)
+		{
+			return;
+		}
+
+		object icon = (short)Microsoft.VisualStudio.Shell.Interop.Constants.SBAI_General;
+		statusBar.Animation(animate ? 1 : 0, ref icon);
+		if (string.IsNullOrEmpty(text))
+		{
+			statusBar.Clear();
+		}
+		else
+		{
+			statusBar.SetText(text);
+		}
+	}
+
+	private static async Task<int> ShowMessageAsync(string message, OLEMSGBUTTON buttons, CancellationToken cancellationToken)
+	{
+		await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+		return VsShellUtilities.ShowMessageBox(
+			Microsoft.VisualStudio.Shell.ServiceProvider.GlobalProvider,
+			message,
+			"Codex CLI Required",
+			OLEMSGICON.OLEMSGICON_QUERY,
+			buttons,
+			OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
+	}
+
+	private static async Task<(bool Success, string Output)> RunAsync(string commandLine, CodexExtensionSettings settings, TimeSpan timeout, CancellationToken cancellationToken)
+	{
+		var commandShell = Environment.GetEnvironmentVariable("ComSpec");
+		if (string.IsNullOrWhiteSpace(commandShell))
+		{
+			commandShell = "cmd.exe";
+		}
+
+		var psi = new ProcessStartInfo
+		{
+			FileName = commandShell,
+			Arguments = "/d /s /c \"" + commandLine + "\"",
+			RedirectStandardOutput = true,
+			RedirectStandardError = true,
+			UseShellExecute = false,
+			CreateNoWindow = true,
+			StandardOutputEncoding = Encoding.UTF8,
+			StandardErrorEncoding = Encoding.UTF8
+		};
+
+		foreach (var entry in CodexEnvironmentPathHelper.ParseEnvironmentVariables(settings.EnvironmentVariables))
+		{
+			psi.EnvironmentVariables[entry.Key] = entry.Value;
+		}
+
+		try
+		{
+			using var process = new Process { StartInfo = psi };
+			var output = new StringBuilder();
+			process.OutputDataReceived += (_, e) => { if (e.Data is not null) { lock (output) { output.AppendLine(e.Data); } } };
+			process.ErrorDataReceived += (_, e) => { if (e.Data is not null) { lock (output) { output.AppendLine(e.Data); } } };
+			process.Start();
+			process.BeginOutputReadLine();
+			process.BeginErrorReadLine();
+
+			using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+			timeoutSource.CancelAfter(timeout);
+			try
+			{
+				await Task.Run(() => process.WaitForExit(), timeoutSource.Token).ConfigureAwait(false);
+				process.WaitForExit();
+			}
+			catch (OperationCanceledException)
+			{
+				try { process.Kill(); } catch { }
+				cancellationToken.ThrowIfCancellationRequested();
+				return (false, "Timed out.");
+			}
+
+			lock (output)
+			{
+				return (process.ExitCode == 0, output.ToString());
+			}
+		}
+		catch (OperationCanceledException)
+		{
+			throw;
+		}
+		catch (Exception ex)
+		{
+			return (false, ex.Message);
+		}
+	}
+
+	private static void Log(string eventName, string detail)
+	{
+		CodexDiagnosticLogger.Shared.Write(eventName, new JObject { ["detail"] = detail });
+	}
+
+	private static string Truncate(string value, int maxLength)
+	{
+		return value.Length <= maxLength ? value : value.Substring(0, maxLength);
+	}
+}

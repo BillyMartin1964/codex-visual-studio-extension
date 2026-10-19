@@ -77,6 +77,7 @@ public sealed class CodexProcessService : IDisposable
     public Func<CodexApprovalRequest, Task<JToken?>>? ApprovalRequestHandler { get; set; }
     public Func<CodexUserInputRequest, Task<JObject?>>? UserInputRequestHandler { get; set; }
     internal Func<JObject, Task<JObject?>>? AppServerRequestHandler { get; set; }
+    internal Func<CodexExtensionSettings, bool, CancellationToken, Task<bool>>? MissingExecutableHandler { get; set; }
     public event Action<string, JToken?>? AppServerNotificationReceived;
     public event Action? ThreadCatalogChanged;
     public event Action<CodexRateLimitSummary>? RateLimitsUpdated;
@@ -115,6 +116,19 @@ public sealed class CodexProcessService : IDisposable
         }
 
         var workingDirectory = ResolveWorkingDirectory(settings.WorkingDirectory);
+        if (string.Equals(method, "account/read", StringComparison.Ordinal)
+            && MissingExecutableHandler is not null
+            && await IsExecutableMissingAsync(settings, cancellationToken).ConfigureAwait(false))
+        {
+            // Lets the webview render its sign-in page; the install prompt fires when the user starts sign-in.
+            return new JObject { ["account"] = JValue.CreateNull(), ["requiresOpenaiAuth"] = true };
+        }
+
+        if (string.Equals(method, "account/login/start", StringComparison.Ordinal))
+        {
+            await EnsureExecutableAvailableAsync(settings, userInitiated: true, cancellationToken).ConfigureAwait(false);
+        }
+
         await EnsureServerReadyAsync(settings, workingDirectory, cancellationToken).ConfigureAwait(false);
         if (string.Equals(method, "account/read", StringComparison.Ordinal))
         {
@@ -934,6 +948,7 @@ public sealed class CodexProcessService : IDisposable
 
             try
             {
+                await EnsureExecutableAvailableAsync(settings, userInitiated: false, cancellationToken).ConfigureAwait(false);
                 StartServerProcess(settings, workingDirectory);
                 await InitializeServerAsync(cancellationToken).ConfigureAwait(false);
             }
@@ -1076,6 +1091,36 @@ public sealed class CodexProcessService : IDisposable
                 _skillsByName.Clear();
                 _skillsCacheKey = workingDirectory;
             }
+        }
+    }
+
+    private static Task<bool> IsExecutableMissingAsync(CodexExtensionSettings settings, CancellationToken cancellationToken)
+    {
+        return Task.Run(
+            () => string.IsNullOrWhiteSpace(CodexExecutableResolver.ResolveExecutableLocation(settings.CodexExecutablePath, settings.EnvironmentVariables)),
+            cancellationToken);
+    }
+
+    private async Task EnsureExecutableAvailableAsync(CodexExtensionSettings settings, bool userInitiated, CancellationToken cancellationToken)
+    {
+        var handler = MissingExecutableHandler;
+        if (handler is null)
+        {
+            return;
+        }
+
+        var resolved = await Task.Run(
+            () => CodexExecutableResolver.ResolveExecutableLocation(settings.CodexExecutablePath, settings.EnvironmentVariables),
+            cancellationToken).ConfigureAwait(false);
+        if (!string.IsNullOrWhiteSpace(resolved))
+        {
+            return;
+        }
+
+        _diagnostics.Write("appserver.executable.missing", new JObject { ["configured"] = settings.CodexExecutablePath });
+        if (!await handler(settings, userInitiated, cancellationToken).ConfigureAwait(false))
+        {
+            throw new InvalidOperationException("Codex CLI not found. Install it with: " + CodexEnvironmentService.FallbackInstallCommand);
         }
     }
 
