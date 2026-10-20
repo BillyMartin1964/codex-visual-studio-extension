@@ -212,6 +212,7 @@ public sealed class CodexToolWindowViewModel : INotifyPropertyChanged, IDisposab
         }
 
         ManagedMcpServers.CollectionChanged += HandleManagedMcpServersChanged;
+        AttachedImages.CollectionChanged += HandleAttachedImagesChanged;
         Skills.CollectionChanged += HandleSkillsChanged;
         McpServers.CollectionChanged += HandleMcpServersChanged;
         Threads.CollectionChanged += HandleThreadsChanged;
@@ -251,6 +252,7 @@ public sealed class CodexToolWindowViewModel : INotifyPropertyChanged, IDisposab
         }
         ClearPendingAssistantOutput();
         ManagedMcpServers.CollectionChanged -= HandleManagedMcpServersChanged;
+        AttachedImages.CollectionChanged -= HandleAttachedImagesChanged;
         Skills.CollectionChanged -= HandleSkillsChanged;
         McpServers.CollectionChanged -= HandleMcpServersChanged;
         Threads.CollectionChanged -= HandleThreadsChanged;
@@ -1441,7 +1443,7 @@ public sealed class CodexToolWindowViewModel : INotifyPropertyChanged, IDisposab
     {
         var promptToSend = queuedSubmission?.Prompt ?? BuildEffectivePrompt();
         var submission = queuedSubmission ?? CaptureComposerSubmission(promptToSend);
-        if (string.IsNullOrWhiteSpace(promptToSend))
+        if (string.IsNullOrWhiteSpace(promptToSend) && submission.ImagePaths.Count == 0)
         {
             return;
         }
@@ -1776,7 +1778,8 @@ public sealed class CodexToolWindowViewModel : INotifyPropertyChanged, IDisposab
                 : _pendingFollowUpPrompts.Dequeue();
         }
 
-        if (nextSubmission is null || string.IsNullOrWhiteSpace(nextSubmission.Prompt))
+        if (nextSubmission is null
+            || (string.IsNullOrWhiteSpace(nextSubmission.Prompt) && nextSubmission.ImagePaths.Count == 0))
         {
             return;
         }
@@ -4275,6 +4278,11 @@ public sealed class CodexToolWindowViewModel : INotifyPropertyChanged, IDisposab
     private void HandleManagedMcpServersChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
         OnPropertyChanged(nameof(HasManagedMcpServers));
+    }
+
+    private void HandleAttachedImagesChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        SendCommand.RaiseCanExecuteChanged();
     }
 
     private void HandleRateLimitsUpdated(CodexRateLimitSummary summary)

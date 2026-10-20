@@ -683,16 +683,18 @@ internal sealed class CodexOfficialWebViewBridge : IDisposable
             case "read-config-for-host":
             {
                 var config = await TryInvokeAppServerAsync("config/read", values, cancellationToken).ConfigureAwait(false);
-                LogInformation("config/read response: " + config?.ToString(Newtonsoft.Json.Formatting.None));
-                //Debug.WriteLine("[CodexVsix permissions] config/read: " + config?.ToString(Formatting.None));
+                // A config response can contain provider credentials, including arbitrary values in
+                // environment variables and HTTP headers. Never serialize it into diagnostics.
+                LogInformation("config/read response received");
                 return config;
             }
 
             case "get-config-requirements-for-host":
             {
                 var requirements = await TryInvokeAppServerAsync("configRequirements/read", values, cancellationToken).ConfigureAwait(false);
-                LogInformation("configRequirements/read response: " + requirements?.ToString(Newtonsoft.Json.Formatting.None));
-                //Debug.WriteLine(DescribeGuardianApprovalRequirements(requirements));
+                // Treat configuration-adjacent responses as sensitive for the same reason as
+                // config/read: their schemas may gain credential-bearing fields over time.
+                LogInformation("configRequirements/read response received");
                 return requirements;
             }
 
@@ -1428,7 +1430,8 @@ internal sealed class CodexOfficialWebViewBridge : IDisposable
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
-                RedirectStandardError = true
+                RedirectStandardError = true,
+                StandardOutputEncoding = Encoding.UTF8
             };
             pickerProcess = Process.Start(startInfo)
                 ?? throw new InvalidOperationException("The isolated file picker process could not be started.");
@@ -1496,6 +1499,7 @@ internal sealed class CodexOfficialWebViewBridge : IDisposable
     private static string BuildIsolatedFilePickerScript(string encodedRequest)
     {
         return "$ErrorActionPreference='Stop';"
+            + "[Console]::OutputEncoding=[Text.Encoding]::UTF8;"
             + "Add-Type -AssemblyName PresentationFramework;"
             + "$request=ConvertFrom-Json ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('"
             + encodedRequest
@@ -1824,7 +1828,8 @@ internal sealed class CodexOfficialWebViewBridge : IDisposable
 
     internal static JObject? ConvertRateLimitsToUsage(JToken? response)
     {
-        var snapshot = (response?["rateLimitsByLimitId"]?["codex"] ?? response?["rateLimits"]) as JObject;
+        var rateLimitsByLimitId = response?["rateLimitsByLimitId"] as JObject;
+        var snapshot = (rateLimitsByLimitId?["codex"] ?? response?["rateLimits"]) as JObject;
         if (snapshot is null)
         {
             return null;

@@ -15,6 +15,7 @@ internal static class CodexCliInstaller
 	private const int IdYes = 6;
 	private static readonly TimeSpan InstallTimeout = TimeSpan.FromMinutes(5);
 	private static readonly TimeSpan DeclineCooldown = TimeSpan.FromMinutes(10);
+	private static readonly TimeSpan ProcessTerminationTimeout = TimeSpan.FromSeconds(5);
 	private static readonly SemaphoreSlim Gate = new(1, 1);
 	private static DateTime _lastDeclinedUtc = DateTime.MinValue;
 
@@ -166,25 +167,35 @@ internal static class CodexCliInstaller
 		{
 			using var process = new Process { StartInfo = psi };
 			var output = new StringBuilder();
+			var standardOutputCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+			var standardErrorCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+			var exited = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 			process.OutputDataReceived += (_, e) => { if (e.Data is not null) { lock (output) { output.AppendLine(e.Data); } } };
+			process.OutputDataReceived += (_, e) => { if (e.Data is null) { standardOutputCompleted.TrySetResult(true); } };
 			process.ErrorDataReceived += (_, e) => { if (e.Data is not null) { lock (output) { output.AppendLine(e.Data); } } };
+			process.ErrorDataReceived += (_, e) => { if (e.Data is null) { standardErrorCompleted.TrySetResult(true); } };
+			process.EnableRaisingEvents = true;
+			process.Exited += (_, _) => exited.TrySetResult(true);
 			process.Start();
 			process.BeginOutputReadLine();
 			process.BeginErrorReadLine();
 
 			using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 			timeoutSource.CancelAfter(timeout);
+			using var cancellationRegistration = timeoutSource.Token.Register(() => exited.TrySetCanceled());
 			try
 			{
-				await Task.Run(() => process.WaitForExit(), timeoutSource.Token).ConfigureAwait(false);
-				process.WaitForExit();
+				await exited.Task.ConfigureAwait(false);
 			}
 			catch (OperationCanceledException)
 			{
-				try { process.Kill(); } catch { }
+				TerminateProcessTree(process);
+				await DrainOutputAsync(standardOutputCompleted.Task, standardErrorCompleted.Task).ConfigureAwait(false);
 				cancellationToken.ThrowIfCancellationRequested();
 				return (false, "Timed out.");
 			}
+
+			await DrainOutputAsync(standardOutputCompleted.Task, standardErrorCompleted.Task).ConfigureAwait(false);
 
 			lock (output)
 			{
@@ -198,6 +209,55 @@ internal static class CodexCliInstaller
 		catch (Exception ex)
 		{
 			return (false, ex.Message);
+		}
+	}
+
+	private static async Task DrainOutputAsync(Task standardOutputCompleted, Task standardErrorCompleted)
+	{
+		var outputCompletion = Task.WhenAll(standardOutputCompleted, standardErrorCompleted);
+		await Task.WhenAny(outputCompletion, Task.Delay(ProcessTerminationTimeout)).ConfigureAwait(false);
+	}
+
+	private static void TerminateProcessTree(Process process)
+	{
+		try
+		{
+			if (process.HasExited)
+			{
+				return;
+			}
+		}
+		catch
+		{
+			return;
+		}
+
+		try
+		{
+			using var taskKill = Process.Start(new ProcessStartInfo
+			{
+				FileName = "taskkill.exe",
+				Arguments = "/pid " + process.Id + " /t /f",
+				UseShellExecute = false,
+				CreateNoWindow = true
+			});
+			taskKill?.WaitForExit((int)ProcessTerminationTimeout.TotalMilliseconds);
+		}
+		catch
+		{
+		}
+
+		try
+		{
+			if (!process.HasExited)
+			{
+				process.Kill();
+				process.WaitForExit((int)ProcessTerminationTimeout.TotalMilliseconds);
+			}
+		}
+		catch
+		{
+			// Best effort: diagnostics must never keep the installer gate held.
 		}
 	}
 
